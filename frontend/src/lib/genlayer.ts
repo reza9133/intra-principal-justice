@@ -5,6 +5,7 @@
 
 import { createClient } from 'genlayer-js';
 import { studionet } from 'genlayer-js/chains';
+import type { GenLayerClient } from 'genlayer-js/types';
 import { getAccounts } from './wallet/client';
 
 // ---------------------------------------------------------------------------
@@ -18,14 +19,14 @@ export const CONTRACT_ADDRESS: string =
 // Client Setup
 // ---------------------------------------------------------------------------
 
-let client = createClient({
+let client: GenLayerClient<any> = createClient({
   chain: studionet,
-});
+}) as GenLayerClient<any>;
 
 /**
  * Update the GenLayer client whenever the active Web3 wallet changes.
  */
-export async function refreshClient() {
+export async function refreshClient(): Promise<GenLayerClient<any>> {
   if (typeof window === 'undefined') return client;
   try {
     const accounts = await getAccounts();
@@ -36,10 +37,14 @@ export async function refreshClient() {
     client = createClient({
       chain: studionet,
       account: address ? (address as `0x${string}`) : undefined,
-    });
+    }) as GenLayerClient<any>;
   } catch (error) {
     console.error('Failed to refresh GenLayer client:', error);
   }
+  return client;
+}
+
+export function getClient(): GenLayerClient<any> {
   return client;
 }
 
@@ -103,7 +108,6 @@ export async function writeContract(
   } as Parameters<typeof client.writeContract>[0]);
 
   // Wait for the transaction receipt
-  // @ts-ignore - safe fallback if types disagree slightly
   const receipt = await client.waitForTransactionReceipt({ hash: txHash });
 
   const status = (receipt as any).status;

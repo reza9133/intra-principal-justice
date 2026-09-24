@@ -1,9 +1,23 @@
-import { studionet } from "genlayer-js/chains";
+import { createClient } from "genlayer-js";
+import type { GenLayerClient } from "genlayer-js/types";
 import type { EIP1193Provider } from "./eip6963";
+import {
+  GENLAYER_CHAIN,
+  GENLAYER_CHAIN_ID,
+  GENLAYER_CHAIN_ID_HEX,
+  GENLAYER_NETWORK,
+  type GenLayerChain,
+  type GenLayerNetworkConfig,
+} from "./network";
 
-export const GENLAYER_CHAIN = studionet;
-export const GENLAYER_CHAIN_ID = studionet.id;
-export const GENLAYER_CHAIN_ID_HEX = `0x${studionet.id.toString(16)}`;
+export {
+  GENLAYER_CHAIN,
+  GENLAYER_CHAIN_ID,
+  GENLAYER_CHAIN_ID_HEX,
+  GENLAYER_NETWORK,
+  type GenLayerChain,
+  type GenLayerNetworkConfig,
+};
 
 let selectedProvider: EIP1193Provider | null = null;
 
@@ -58,9 +72,9 @@ export async function addGenLayerNetwork(): Promise<void> {
     method: "wallet_addEthereumChain",
     params: [{
       chainId: GENLAYER_CHAIN_ID_HEX,
-      chainName: studionet.name,
-      rpcUrls: [...studionet.rpcUrls.default.http],
-      nativeCurrency: studionet.nativeCurrency,
+      chainName: GENLAYER_NETWORK.chainName,
+      rpcUrls: GENLAYER_NETWORK.rpcUrls,
+      nativeCurrency: GENLAYER_NETWORK.nativeCurrency,
     }],
   });
 }
@@ -133,4 +147,20 @@ export async function revokePermissions(): Promise<void> {
       params: [{ eth_accounts: {} }],
     });
   } catch {}
+}
+
+export function createGenLayerClient(address?: string): GenLayerClient<any> {
+  const config: any = {
+    chain: GENLAYER_CHAIN,
+  };
+  if (address) {
+    config.account = address as `0x${string}`;
+  }
+  return createClient(config) as GenLayerClient<any>;
+}
+
+export async function getClient(): Promise<GenLayerClient<any>> {
+  const accounts = await getAccounts();
+  const address = accounts[0];
+  return createGenLayerClient(address);
 }
