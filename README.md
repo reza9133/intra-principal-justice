@@ -205,3 +205,19 @@ MIT
 - [GenLayer Documentation](https://docs.genlayer.com)
 - [GenLayer Studio](https://studio.genlayer.com)
 - [GenLayer Discord](https://discord.gg/8Jm4v89VAu)
+
+---
+
+## v2 Contract Upgrade Notes
+
+- Agents are bound to wallets (`bind_agent_wallet`); only the bound wallet or the owner can act as an agent.
+- Prompt-injection hardening, shared leader/validator verdict validation, auto-escalation below `min_confidence`.
+- New owner methods: `resolve_escalation`, `set_paused`, `set_min_confidence`, `transfer_ownership` / `accept_ownership`.
+- New: `withdraw_proposal`, paginated views (`get_proposals`, `get_disputes`), per-agent strikes.
+
+Run tests (from project root):
+
+```bash
+pip install -r requirements.txt
+pytest tests/direct/ -v
+```
