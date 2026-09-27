@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { HowItWorks } from './components/HowItWorks';
+import { HowItWorksModal } from './components/HowItWorksModal';
 import { ConstitutionPanel } from './components/ConstitutionPanel';
 import { AgentRegistry } from './components/AgentRegistry';
 import { ProposalForm } from './components/ProposalForm';
@@ -190,6 +191,7 @@ function App() {
 
       <ClaimableWidget claimable={claimable} onWithdraw={withdraw} status={status} />
       <Footer />
+      <HowItWorksModal />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 // =============================================================================
-// useContract -- Permissionless AI Court (v3) contract interaction
+// useContract -- Permissionless AI Court contract interaction
 // Deposits are exact GEN amounts read from get_config(); propose_action and
 // object_to_proposal are payable and must attach them as tx value.
 // =============================================================================
@@ -44,21 +44,13 @@ export function useContract(myAddress?: string | null) {
 
     setIsLoading(true);
     try {
-      const [
-        constResult,
-        configResult,
-        statsResult,
-        ownerResult,
-        agentsResult,
-        proposalsResult,
-      ] = await Promise.allSettled([
-        readContract<string>('get_constitution'),
-        readContract<ContractConfig>('get_config'),
-        readContract<ContractStats>('get_stats'),
-        readContract<string>('get_owner'),
-        readContract<Agent[]>('get_agents', [0, PAGE_SIZE]),
-        readContract<Proposal[]>('get_proposals', [0, PAGE_SIZE]),
-      ]);
+      const [constResult, configResult, statsResult, ownerResult] =
+        await Promise.allSettled([
+          readContract<string>('get_constitution'),
+          readContract<ContractConfig>('get_config'),
+          readContract<ContractStats>('get_stats'),
+          readContract<string>('get_owner'),
+        ]);
 
       if (constResult.status === 'fulfilled' && constResult.value != null) {
         setConstitution(String(constResult.value));
@@ -66,12 +58,32 @@ export function useContract(myAddress?: string | null) {
       if (configResult.status === 'fulfilled' && configResult.value) {
         setConfig(configResult.value);
       }
+      let liveStats: ContractStats | null = null;
       if (statsResult.status === 'fulfilled' && statsResult.value) {
-        setStats(statsResult.value);
+        liveStats = statsResult.value;
+        setStats(liveStats);
       }
       if (ownerResult.status === 'fulfilled' && ownerResult.value != null) {
         setOwner(String(ownerResult.value));
       }
+
+      // get_agents/get_proposals only return one page at a time (contract
+      // caps limit at MAX_PAGE). Once the registry/proposal count exceeds
+      // PAGE_SIZE, offset 0 would keep showing the OLDEST entries forever
+      // and hide everything new -- so page from the tail once we know the
+      // total count from get_stats().
+      const agentOffset = liveStats
+        ? Math.max(0, liveStats.agents - PAGE_SIZE)
+        : 0;
+      const proposalOffset = liveStats
+        ? Math.max(0, liveStats.proposals - PAGE_SIZE)
+        : 0;
+
+      const [agentsResult, proposalsResult] = await Promise.allSettled([
+        readContract<Agent[]>('get_agents', [agentOffset, PAGE_SIZE]),
+        readContract<Proposal[]>('get_proposals', [proposalOffset, PAGE_SIZE]),
+      ]);
+
       if (agentsResult.status === 'fulfilled' && Array.isArray(agentsResult.value)) {
         setAgents(agentsResult.value);
       }
