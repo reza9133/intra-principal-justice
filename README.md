@@ -1,33 +1,145 @@
-# Intra-Principal Justice v3
+# Intra-Principal Justice
 
-**A permissionless, public, AI-judged court on GenLayer.** Any wallet can self-register as an agent, propose actions, file objections, and have disputes resolved by GenLayer's validator consensus against an on-chain Constitution.
+A permissionless, public, AI-judged court built as a GenLayer Intelligent
+Contract. Any wallet can self-register as an agent, propose actions, file
+objections against them, and have disputes resolved by GenLayer's validator
+consensus against an on-chain constitution — no admin, no allowlist, no
+approval step.
 
-Built with [GenLayer](https://genlayer.com) · React + Vite · Tailwind CSS
+**Stack:** GenLayer Intelligent Contract (Python) · React + Vite + TypeScript
+· Tailwind CSS
 
 ---
 
-## Deployed contract
+## Table of contents
 
-| Network | Address |
+- [Deployment](#deployment)
+- [Architecture](#architecture)
+- [How a case works](#how-a-case-works)
+- [Verdicts and settlement](#verdicts-and-settlement)
+- [Security model](#security-model)
+- [Project structure](#project-structure)
+- [Getting started](#getting-started)
+- [Testing](#testing)
+- [Contract reference](#contract-reference)
+- [Known limitations](#known-limitations)
+
+---
+
+## Deployment
+
+| Network | Contract address |
 |---|---|
-| studionet | `0x274130C0D9F938fEf34d9e8253803418F6E4a098` |
+| GenLayer Studionet | `0x274130C0D9F938fEf34d9e8253803418F6E4a098` |
 
-This address is already set in `frontend/.env` and `frontend/.env.example` as `VITE_CONTRACT_ADDRESS`.
-
-> ⚠️ **The frontend in this repo talks to the OLD (v2) contract ABI** — owner-only agent registration, non-payable `propose_action`/`object_to_proposal`, `escalate_to_human`, no `withdraw`. The `contracts/intra_principal_justice.py` in this delivery is the NEW (v3) permissionless contract, with a different ABI (see below). If the address above is a deployment of the v3 contract, the frontend's `hooks/useContract.ts` and `lib/genlayer.ts` need to be updated to match before it will work end to end. I have not made that update.
+The address is preconfigured in `frontend/.env` and `frontend/.env.example`
+as `VITE_CONTRACT_ADDRESS`. The frontend's ABI usage
+(`hooks/useContract.ts`, `lib/genlayer.ts`, and all components) is written
+against the contract in this repository, `contracts/intra_principal_justice.py`.
+If you redeploy the contract yourself, update the address in `frontend/.env`
+to match.
 
 ---
 
-## What changed from v2 → v3
+## Architecture
 
-- **Self-registration:** `register_agent(handle, role)` — any wallet, one step, no owner involved. Identity is always `gl.message.sender_address`.
-- **Owner scope:** only `update_constitution`, `transfer_ownership` / `accept_ownership`, `renounce_ownership`. No registration, pausing, or dispute resolution powers.
-- **Economic security:** `propose_action` and `object_to_proposal` are `payable` and require an exact GEN deposit. Losing side is slashed 10% to a locked `reserve`; winning side is rewarded from the loser's deposit. Inconclusive verdicts refund minus a 5% fee.
-- **Permissionless resolution:** after a fixed objection window, `resolve_proposal` can be called by anyone; validators judge via `gl.vm.run_nondet_unsafe`.
-- **Pull payments:** funds are claimed via `withdraw()`, never pushed automatically.
-- **Hardening:** sequential IDs, snapshot handles/roles/Constitution-version per proposal, `_clean` sanitization against prompt injection, per-address open-proposal cap, per-proposal objection cap, bounded pagination, sized integers throughout.
+### Self-registration
 
-Full design notes and the security rationale are in the contract's module docstring at the top of `contracts/intra_principal_justice.py`.
+`register_agent(handle, role)` is open to any wallet. There is no separate
+agent ID: identity is always `gl.message.sender_address`, and the call binds
+the handle and role to that address in a single transaction. There is no
+owner-side registration, approval, or removal.
+
+### Owner scope
+
+The owner's authority is limited to the constitution text:
+
+- `update_constitution(new_text)` — publishes a new version. Proposals
+  already filed are judged under the version in force when they were filed,
+  so rules can never change retroactively.
+- `transfer_ownership` / `accept_ownership` — two-step handover.
+- `renounce_ownership` — freezes the constitution permanently.
+
+The owner cannot register or remove agents, pause the contract, resolve
+disputes, or touch any balance.
+
+### Economic security
+
+`propose_action` and `object_to_proposal` are `payable` and require an exact
+GEN deposit (`get_config()` returns the current amounts). Objections are
+collected for a fixed window; once it closes, anyone may call
+`resolve_proposal`, and all objections on that proposal are judged together
+by GenLayer's validator consensus (`gl.vm.run_nondet_unsafe`). Judging
+everything at once — rather than resolving objections as they arrive —
+removes any advantage from objection ordering.
+
+All payouts are pull payments: a settled case credits an internal
+`claimable` balance, and the party withdraws it with `withdraw()`. Nothing
+is pushed automatically.
+
+---
+
+## How a case works
+
+1. Register once: `register_agent(handle, role)`.
+2. File a proposal: `propose_action(action_description, reasoning)` with the
+   proposal deposit attached.
+3. During the objection window, other registered agents may
+   `object_to_proposal(proposal_id, objection_reason)` with the objection
+   deposit attached. An agent cannot object to its own proposal, and each
+   address may object once per proposal.
+4. Once the window closes, anyone calls `resolve_proposal(proposal_id)`:
+   - No objections → approved automatically, full refund, no court.
+   - One or more objections → the constitution, the proposal, and every
+     objection are sent to the validator court, which returns a decision,
+     a confidence score, and reasoning.
+5. Deposits are settled per the outcome (see below) and each party
+   withdraws their claimable balance with `withdraw()`.
+
+---
+
+## Verdicts and settlement
+
+| Decision | Trigger | Settlement |
+|---|---|---|
+| **Approved** | No objections, or the court rules `allow_action` | Proposer receives their deposit back plus the objectors' deposits, minus a slash cut to the reserve. Each objector takes a strike. |
+| **Blocked** | The court rules `block_action` | Objectors receive their deposit back plus an equal share of the proposer's deposit, minus a slash cut. The proposer takes a strike. |
+| **Inconclusive** | The court rules `inconclusive`, or confidence falls below the minimum threshold | Everyone is refunded minus a small fee. No strikes. |
+
+Slash cuts and fees accumulate in a `reserve` balance that is permanently
+locked — no owner or address can withdraw it. An address accumulating three
+strikes is banned from proposing or objecting again.
+
+---
+
+## Security model
+
+The contract is written defensively against the standard set of on-chain
+and AI-specific attack vectors:
+
+- **Reentrancy / state ordering** — checks-effects-interactions throughout;
+  the only outbound transfer is in `withdraw()`, after the claimable balance
+  is zeroed. Settlement includes a conservation check (payouts + reserve
+  must equal deposits released) that reverts on any mismatch.
+- **Front-running** — proposal and objection IDs are sequential and never
+  chosen by the caller. Handles, roles, and the constitution version are
+  snapshotted into each proposal at filing time, so nothing can be edited
+  underneath an open case.
+- **Griefing / spam** — deposits are exact and floor-checked at deploy
+  time, with a per-address cap on open proposals and a per-proposal cap on
+  objections.
+- **Prompt injection** — all free-text input passes through `_clean`
+  (strips control, zero-width, and bidi-override characters; neutralizes
+  angle brackets so user text can never forge an XML-style fence) before
+  it is stored or shown to the judge. Oversized input is rejected outright,
+  not silently truncated, so what the judge reads is exactly what was
+  stored. Validators re-run the same verdict-normalization function as the
+  leader rather than trusting its output.
+- **Integer safety / DoS** — sized integers (`u32`/`u64`/`u256`) throughout,
+  and every paginated view enforces an explicit offset/limit bound.
+
+Full design notes live in the module docstring at the top of
+`contracts/intra_principal_justice.py`.
 
 ---
 
@@ -36,14 +148,26 @@ Full design notes and the security rationale are in the contract's module docstr
 ```
 intra-principal-justice/
 ├── contracts/
-│   └── intra_principal_justice.py      # v3 permissionless GenLayer Intelligent Contract
+│   └── intra_principal_justice.py     # the Intelligent Contract
 ├── tests/
 │   ├── direct/
 │   │   ├── conftest.py
-│   │   └── test_intra_principal_justice.py   # 32 tests: registration, deposits, slashing,
-│   │                                           # prompt-injection, pagination, conservation
-│   └── sim/                             # offline stand-in SDK (dev-only, see tests/sim/README.md)
-├── frontend/                            # v2 React/Vite/Tailwind app — ABI mismatch, see warning above
+│   │   └── test_intra_principal_justice.py   # 32 tests
+│   └── sim/                            # offline stand-in SDK (dev-only)
+├── frontend/
+│   ├── src/
+│   │   ├── components/                 # AgentRegistry, ProposalForm,
+│   │   │                                # ObjectionForm, ProposalList,
+│   │   │                                # DisputeList, VerdictCard,
+│   │   │                                # ConstitutionPanel, ClaimableWidget, ...
+│   │   ├── hooks/                      # useWallet, useContract
+│   │   ├── lib/
+│   │   │   ├── genlayer.ts             # client + read/write helpers
+│   │   │   ├── format.ts               # GEN/address/countdown formatting
+│   │   │   └── wallet/                 # EIP-6963 wallet discovery
+│   │   └── types/                      # types mirroring the contract's views
+│   ├── .env                            # VITE_CONTRACT_ADDRESS, RPC, chain ID
+│   └── package.json
 ├── gltest.config.yaml
 ├── pyproject.toml
 └── README.md
@@ -51,64 +175,108 @@ intra-principal-justice/
 
 ---
 
-## Quick start
+## Getting started
 
-### 1. Run the contract tests
+### Prerequisites
 
-Against the real SDK:
-```bash
-pytest tests/direct -v
-```
+- Python 3.11+ and the GenLayer toolchain (`gltest`, `genvm-lint`) for the
+  contract.
+- Node.js 18+ and npm for the frontend.
+- A Web3 wallet (e.g. MetaMask) configured for GenLayer Studionet.
 
-Against the offline stand-in (no GenVM required, for quick logic checks only):
-```bash
-PYTHONPATH=tests/sim python -m pytest -p sim_plugin tests/direct -v
-```
+### 1. Deploy or point at the contract
 
-Also run the linter before any deployment:
-```bash
-genvm-lint check contracts/intra_principal_justice.py
-```
-
-### 2. Deploy the contract
-
-In [GenLayer Studio](https://studio.genlayer.com), deploy `contracts/intra_principal_justice.py` with constructor args:
+The address above is already wired into the frontend. To deploy your own
+instance instead, use GenLayer Studio with these constructor arguments:
 
 ```
-constitution:        "1. Security always wins. 2. Under-budget travel is approved."
-proposal_deposit:     <wei amount, e.g. 20000000000000000>
-objection_deposit:    <wei amount, e.g. 10000000000000000>
-objection_window:     <seconds, e.g. 3600>
+constitution:       "1. Security always wins. 2. Under-budget travel is approved."
+proposal_deposit:   20000000000000000   # 0.02 GEN, in wei
+objection_deposit:  10000000000000000   # 0.01 GEN, in wei
+objection_window:   3600                # seconds
 ```
 
-### 3. Configure the frontend
+Then update `VITE_CONTRACT_ADDRESS` in `frontend/.env` to your deployment.
+
+### 2. Run the frontend
 
 ```bash
 cd frontend
 npm install
-```
-
-`frontend/.env` is already set to:
-```env
-VITE_CONTRACT_ADDRESS=0x274130C0D9F938fEf34d9e8253803418F6E4a098
-VITE_GENLAYER_RPC=https://studio.genlayer.com/api
-VITE_CHAIN_ID=61999
-```
-
-```bash
 npm run dev
 ```
 
-Remember: the frontend code itself still calls the v2 ABI and will need updating for `register_agent`'s new signature, payable calls, `resolve_proposal`, and `withdraw` before it works against the v3 contract.
+Connect a wallet on Studionet, register, and the app is ready to use.
+
+### 3. Build for production
+
+```bash
+npm run build
+```
 
 ---
 
-## Verdicts
+## Testing
 
-| Decision | Meaning |
-|---|---|
-| `allow_action` | Constitution supports the proposer; objections are rejected and slashed. |
-| `block_action` | An objection correctly shows the action violates the Constitution; proposer is slashed. |
-| `inconclusive` | Constitution is silent/ambiguous, or confidence was below the threshold; everyone refunded minus a small fee. |
+Run the full suite against the real GenLayer SDK:
 
-`escalate_to_human` no longer exists — there is no human owner in the loop for disputes.
+```bash
+pytest tests/direct -v
+```
+
+Run against the offline stand-in SDK (no GenVM required — useful for a
+quick logic check, not a substitute for the real suite):
+
+```bash
+PYTHONPATH=tests/sim python -m pytest -p sim_plugin tests/direct -v
+```
+
+Lint before any deployment:
+
+```bash
+genvm-lint check contracts/intra_principal_justice.py
+```
+
+The 32 tests cover self-registration, exact-deposit enforcement, open-
+proposal and objection caps, window boundaries, all three verdict paths
+(including rounding/dust handling), slashing and strike accumulation,
+malformed and adversarial LLM output, prompt-injection containment, and an
+end-to-end conservation check across a mixed multi-case scenario.
+
+---
+
+## Contract reference
+
+| Method | Type | Description |
+|---|---|---|
+| `register_agent(handle, role)` | write | Self-register the calling wallet as an agent. |
+| `propose_action(action_description, reasoning)` | payable | File a proposal; requires the exact proposal deposit. |
+| `object_to_proposal(proposal_id, objection_reason)` | payable | File an objection; requires the exact objection deposit. |
+| `resolve_proposal(proposal_id)` | write | Callable by anyone once the objection window has closed. |
+| `withdraw()` | write | Claim your settled balance. |
+| `update_constitution(new_text)` | write | Owner only. |
+| `transfer_ownership` / `accept_ownership` / `renounce_ownership` | write | Owner-handover controls. |
+| `get_config()` / `get_stats()` | view | Current deposits, window, and contract-wide totals. |
+| `get_agent(address)` / `get_agent_by_handle(handle)` / `get_agents(offset, limit)` | view | Agent lookups, paginated. |
+| `get_proposal(id)` / `get_proposals(offset, limit)` | view | Proposal lookups, paginated. |
+| `get_objections_for(proposal_id)` | view | Objections filed against a proposal. |
+| `get_dispute(id)` / `get_disputes(offset, limit)` | view | Resolved-case lookups, paginated. |
+| `get_constitution()` / `get_constitution_at(version)` / `get_constitution_version()` | view | Constitution text and version history. |
+| `get_claimable(address)` | view | Withdrawable balance for an address. |
+
+---
+
+## Known limitations
+
+- **Sybil evasion** — a banned wallet can register again from a fresh
+  address; the deposit requirement makes this costly but doesn't prevent it.
+- **Objection-slot saturation** — an attacker controlling several wallets
+  could fill a proposal's objection slots with weak objections, at the cost
+  of the slash cut on each one.
+- **Borderline confidence** — validators disagreeing by more than the
+  configured tolerance fail consensus, and the call can simply be retried;
+  verdicts near the confidence threshold can be flaky in principle.
+- **Uncooperative recipients** — a `withdraw()` to a contract wallet that
+  rejects incoming transfers would strand those funds.
+- **Fixed economics** — deposits and the objection window are set at
+  deployment and are immutable afterward; choose them deliberately.
