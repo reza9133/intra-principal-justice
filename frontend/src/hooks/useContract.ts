@@ -30,15 +30,10 @@ export function useContract(myAddress?: string | null) {
   const [stats, setStats] = useState<ContractStats | null>(null);
   const [owner, setOwner] = useState<string>('');
   const [claimable, setClaimable] = useState<number>(0);
+  const [myAgent, setMyAgent] = useState<Agent | null>(null);
   const [status, setStatus] = useState<TransactionStatus>('idle');
   const [txError, setTxError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-
-  const myAgent =
-    myAddress != null
-      ? agents.find((a) => a.address.toLowerCase() === myAddress.toLowerCase()) ??
-        null
-      : null;
 
   // -------------------------------------------------------------------------
   // Fetch all contract state from the chain
@@ -131,8 +126,17 @@ export function useContract(myAddress?: string | null) {
         } catch {
           setClaimable(0);
         }
+        try {
+          // Fetched directly (not derived from the paginated agents list above)
+          // so it stays correct once the registry grows past PAGE_SIZE.
+          const mine = await readContract<Agent>('get_agent', [myAddress]);
+          setMyAgent(mine ?? null);
+        } catch {
+          setMyAgent(null); // reverts with "Agent not found" when unregistered
+        }
       } else {
         setClaimable(0);
+        setMyAgent(null);
       }
     } catch (err) {
       console.error('[useContract] Failed to fetch:', err);
