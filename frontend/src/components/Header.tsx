@@ -11,7 +11,16 @@ export function Header() {
             Intra-Principal <span className="text-court-gold">Justice</span>
           </span>
         </div>
-        <AccountPanel />
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={() => window.dispatchEvent(new Event('open-how-it-works'))}
+            className="text-sm text-gray-300 hover:text-white px-3 py-2 rounded-lg hover:bg-white/10 transition-colors flex items-center space-x-1.5"
+          >
+            <span>❔</span>
+            <span className="hidden sm:inline">How it works</span>
+          </button>
+          <AccountPanel />
+        </div>
       </div>
     </header>
   );
