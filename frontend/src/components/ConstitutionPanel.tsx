@@ -4,11 +4,13 @@ import { LoadingSpinner } from './LoadingSpinner';
 
 interface Props {
   currentText: string;
+  isOwner: boolean;
+  version: number;
   onUpdate: (text: string) => Promise<void>;
   status: TransactionStatus;
 }
 
-export function ConstitutionPanel({ currentText, onUpdate, status }: Props) {
+export function ConstitutionPanel({ currentText, isOwner, version, onUpdate, status }: Props) {
   const [isEditing, setIsEditing] = useState(false);
   const [text, setText] = useState(currentText);
 
@@ -26,15 +28,21 @@ export function ConstitutionPanel({ currentText, onUpdate, status }: Props) {
       <div className="bg-gray-50 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
         <div className="flex items-center space-x-2">
           <span className="text-2xl">📜</span>
-          <h2 className="text-xl font-bold text-gray-900">Organization Constitution</h2>
+          <h2 className="text-xl font-bold text-gray-900">Constitution (v{version})</h2>
         </div>
-        {!isEditing && (
+        {!isEditing && isOwner && (
           <button
             onClick={() => setIsEditing(true)}
             className="text-court-gold hover:text-yellow-600 font-medium px-4 py-2 border border-court-gold rounded-lg hover:bg-yellow-50 transition-colors"
           >
-            Edit Constitution
+            Publish New Version
           </button>
+        )}
+        {!isOwner && (
+          <span className="text-xs text-gray-400">
+            Only the contract owner can publish a new version. Proposals already filed keep the
+            rules they were filed under.
+          </span>
         )}
       </div>
 

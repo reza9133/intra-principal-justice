@@ -1,223 +1,114 @@
-# Intra-Principal Justice
+# Intra-Principal Justice v3
 
-**The Internal Court for Your AI Agent Fleet** — An Intelligent Contract on GenLayer that resolves disputes between a user's own staff of AI agents who share resources but have conflicting KPIs.
+**A permissionless, public, AI-judged court on GenLayer.** Any wallet can self-register as an agent, propose actions, file objections, and have disputes resolved by GenLayer's validator consensus against an on-chain Constitution.
 
 Built with [GenLayer](https://genlayer.com) · React + Vite · Tailwind CSS
 
 ---
 
-## 🧠 Core Concept
+## Deployed contract
 
-When you run multiple AI agents (Budget Agent, Travel Agent, Security Agent, etc.) that share a wallet and resources, they will inevitably conflict. Who decides? **This contract does.**
+| Network | Address |
+|---|---|
+| studionet | `0x274130C0D9F938fEf34d9e8253803418F6E4a098` |
 
-The owner writes a plain-language **Constitution** (e.g., _"Prefer price over comfort if the gap is >15%"_), registers agents, and when Agent A proposes an action that Agent B objects to, the contract triggers an **AI-powered court** that evaluates the dispute against the Constitution using GenLayer's decentralized validator consensus.
+This address is already set in `frontend/.env` and `frontend/.env.example` as `VITE_CONTRACT_ADDRESS`.
 
-### How It Works
-
-1. **📜 Set Constitution** — Owner writes plain-language governance rules
-2. **🤖 Agents Propose** — Any registered agent can propose an action with reasoning
-3. **⚔️ Objection Filed** — Another agent objects → the proposal is **locked**
-4. **⚖️ AI Court Rules** — GenLayer validators independently evaluate the dispute against the Constitution and reach consensus on a verdict
-
-### Verdicts
-
-| Decision | Meaning |
-|----------|---------|
-| `allow_action` | The Constitution supports the proposing agent |
-| `block_action` | The Constitution supports the objecting agent |
-| `escalate_to_human` | The Constitution is ambiguous; human owner must decide |
+> ⚠️ **The frontend in this repo talks to the OLD (v2) contract ABI** — owner-only agent registration, non-payable `propose_action`/`object_to_proposal`, `escalate_to_human`, no `withdraw`. The `contracts/intra_principal_justice.py` in this delivery is the NEW (v3) permissionless contract, with a different ABI (see below). If the address above is a deployment of the v3 contract, the frontend's `hooks/useContract.ts` and `lib/genlayer.ts` need to be updated to match before it will work end to end. I have not made that update.
 
 ---
 
-## 📁 Project Structure
+## What changed from v2 → v3
+
+- **Self-registration:** `register_agent(handle, role)` — any wallet, one step, no owner involved. Identity is always `gl.message.sender_address`.
+- **Owner scope:** only `update_constitution`, `transfer_ownership` / `accept_ownership`, `renounce_ownership`. No registration, pausing, or dispute resolution powers.
+- **Economic security:** `propose_action` and `object_to_proposal` are `payable` and require an exact GEN deposit. Losing side is slashed 10% to a locked `reserve`; winning side is rewarded from the loser's deposit. Inconclusive verdicts refund minus a 5% fee.
+- **Permissionless resolution:** after a fixed objection window, `resolve_proposal` can be called by anyone; validators judge via `gl.vm.run_nondet_unsafe`.
+- **Pull payments:** funds are claimed via `withdraw()`, never pushed automatically.
+- **Hardening:** sequential IDs, snapshot handles/roles/Constitution-version per proposal, `_clean` sanitization against prompt injection, per-address open-proposal cap, per-proposal objection cap, bounded pagination, sized integers throughout.
+
+Full design notes and the security rationale are in the contract's module docstring at the top of `contracts/intra_principal_justice.py`.
+
+---
+
+## Project structure
 
 ```
 intra-principal-justice/
 ├── contracts/
-│   └── intra_principal_justice.py    # GenLayer Intelligent Contract
-├── frontend/
-│   ├── src/
-│   │   ├── components/               # React components
-│   │   ├── hooks/                     # Custom hooks
-│   │   ├── lib/                       # GenLayer client
-│   │   ├── types/                     # TypeScript types
-│   │   ├── App.tsx
-│   │   ├── main.tsx
-│   │   └── index.css
-│   ├── index.html
-│   ├── package.json
-│   ├── vite.config.ts
-│   ├── tailwind.config.js
-│   └── .env.example
+│   └── intra_principal_justice.py      # v3 permissionless GenLayer Intelligent Contract
+├── tests/
+│   ├── direct/
+│   │   ├── conftest.py
+│   │   └── test_intra_principal_justice.py   # 32 tests: registration, deposits, slashing,
+│   │                                           # prompt-injection, pagination, conservation
+│   └── sim/                             # offline stand-in SDK (dev-only, see tests/sim/README.md)
+├── frontend/                            # v2 React/Vite/Tailwind app — ABI mismatch, see warning above
+├── gltest.config.yaml
+├── pyproject.toml
 └── README.md
 ```
 
 ---
 
-## 🚀 Quick Start
+## Quick start
 
-### Prerequisites
+### 1. Run the contract tests
 
-- Node.js 18+ and npm
-- A GenLayer Studio account ([studio.genlayer.com](https://studio.genlayer.com))
+Against the real SDK:
+```bash
+pytest tests/direct -v
+```
 
-### 1. Deploy the Smart Contract
+Against the offline stand-in (no GenVM required, for quick logic checks only):
+```bash
+PYTHONPATH=tests/sim python -m pytest -p sim_plugin tests/direct -v
+```
 
-1. Open [GenLayer Studio](https://studio.genlayer.com)
-2. Create a new contract and paste the contents of `contracts/intra_principal_justice.py`
-3. Deploy with a constructor argument for the constitution:
-   ```
-   constitution: "1. Prefer price over comfort if the gap is >15%. 2. Security concerns always take priority. 3. Travel bookings must be approved if under budget."
-   ```
-4. Copy the deployed contract address
+Also run the linter before any deployment:
+```bash
+genvm-lint check contracts/intra_principal_justice.py
+```
 
-### 2. Set Up the Frontend
+### 2. Deploy the contract
+
+In [GenLayer Studio](https://studio.genlayer.com), deploy `contracts/intra_principal_justice.py` with constructor args:
+
+```
+constitution:        "1. Security always wins. 2. Under-budget travel is approved."
+proposal_deposit:     <wei amount, e.g. 20000000000000000>
+objection_deposit:    <wei amount, e.g. 10000000000000000>
+objection_window:     <seconds, e.g. 3600>
+```
+
+### 3. Configure the frontend
 
 ```bash
 cd frontend
 npm install
 ```
 
-### 3. Configure Environment
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set your contract address:
-
+`frontend/.env` is already set to:
 ```env
-VITE_CONTRACT_ADDRESS=0xYourDeployedContractAddress
+VITE_CONTRACT_ADDRESS=0x274130C0D9F938fEf34d9e8253803418F6E4a098
 VITE_GENLAYER_RPC=https://studio.genlayer.com/api
 VITE_CHAIN_ID=61999
 ```
-
-### 4. Run Development Server
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser.
+Remember: the frontend code itself still calls the v2 ABI and will need updating for `register_agent`'s new signature, payable calls, `resolve_proposal`, and `withdraw` before it works against the v3 contract.
 
 ---
 
-## ☁️ Cloudflare Pages Deployment
+## Verdicts
 
-### Build Configuration
+| Decision | Meaning |
+|---|---|
+| `allow_action` | Constitution supports the proposer; objections are rejected and slashed. |
+| `block_action` | An objection correctly shows the action violates the Constitution; proposer is slashed. |
+| `inconclusive` | Constitution is silent/ambiguous, or confidence was below the threshold; everyone refunded minus a small fee. |
 
-| Setting | Value |
-|---------|-------|
-| **Framework preset** | None |
-| **Build command** | `npm run build` |
-| **Build output directory** | `dist` |
-| **Root directory** | `frontend` |
-| **Node.js version** | 18 |
-
-### Environment Variables
-
-Set these in **Cloudflare Dashboard → Pages → Settings → Environment Variables**:
-
-| Variable | Value | Required |
-|----------|-------|----------|
-| `VITE_CONTRACT_ADDRESS` | `0x...` (your deployed contract address) | ✅ Yes |
-| `VITE_GENLAYER_RPC` | `https://studio.genlayer.com/api` | ✅ Yes |
-| `VITE_CHAIN_ID` | `61999` | ✅ Yes |
-| `NODE_VERSION` | `18` | Recommended |
-
-> **Important:** Vite environment variables must be prefixed with `VITE_` to be available in the frontend bundle. They are embedded at **build time**, not runtime.
-
-### Deploy via Cloudflare CLI
-
-```bash
-# Install wrangler
-npm install -g wrangler
-
-# Login to Cloudflare
-wrangler login
-
-# Build
-cd frontend
-npm run build
-
-# Deploy
-wrangler pages deploy dist --project-name=intra-principal-justice
-```
-
-### Deploy via Git Integration
-
-1. Push your repo to GitHub/GitLab
-2. In Cloudflare Dashboard → Pages → Create a project
-3. Connect your repository
-4. Set the build settings as shown above
-5. Set environment variables
-6. Deploy
-
----
-
-## 🔧 Smart Contract API
-
-### Write Methods
-
-| Method | Parameters | Description |
-|--------|-----------|-------------|
-| `update_constitution` | `new_constitution: str` | Update governance rules (owner only) |
-| `register_agent` | `agent_id: str, role: str` | Register a new AI agent (owner only) |
-| `remove_agent` | `agent_id: str` | Remove an agent (owner only) |
-| `propose_action` | `agent_id: str, action_description: str, reasoning: str` | Submit a proposal |
-| `object_to_proposal` | `proposal_id: u32, objector_agent_id: str, objection_reason: str` | Object to a proposal (triggers court) |
-
-### View Methods
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `get_constitution` | `str` | Current constitution text |
-| `get_all_proposals` | `list[Proposal]` | All proposals with status |
-| `get_all_disputes` | `list[Dispute]` | All disputes with verdicts |
-| `get_all_agents` | `list[Agent]` | All registered agents |
-| `get_stats` | `dict` | Summary statistics |
-
----
-
-## ⚖️ Consensus Mechanism
-
-The contract uses `gl.vm.run_nondet_unsafe(leader_fn, validator_fn)` for the court:
-
-1. **Leader** evaluates the dispute with an LLM prompt and returns a JSON verdict
-2. **Validators** independently run the same evaluation
-3. **Agreement requires:**
-   - ✅ Exact match on `decision` (allow/block/escalate)
-   - ✅ `confidence` scores within **15 points** of each other
-4. If consensus fails, the leader is rotated and the process repeats
-
-This ensures no single AI model controls the verdict — multiple independent evaluations must agree.
-
----
-
-## 📄 License
-
-MIT
-
----
-
-## 🔗 Links
-
-- [GenLayer Documentation](https://docs.genlayer.com)
-- [GenLayer Studio](https://studio.genlayer.com)
-- [GenLayer Discord](https://discord.gg/8Jm4v89VAu)
-
----
-
-## v2 Contract Upgrade Notes
-
-- Agents are bound to wallets (`bind_agent_wallet`); only the bound wallet or the owner can act as an agent.
-- Prompt-injection hardening, shared leader/validator verdict validation, auto-escalation below `min_confidence`.
-- New owner methods: `resolve_escalation`, `set_paused`, `set_min_confidence`, `transfer_ownership` / `accept_ownership`.
-- New: `withdraw_proposal`, paginated views (`get_proposals`, `get_disputes`), per-agent strikes.
-
-Run tests (from project root):
-
-```bash
-pip install -r requirements.txt
-pytest tests/direct/ -v
-```
+`escalate_to_human` no longer exists — there is no human owner in the loop for disputes.

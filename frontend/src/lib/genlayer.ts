@@ -86,6 +86,7 @@ export interface WriteResult {
 export async function writeContract(
   functionName: string,
   args: unknown[] = [],
+  value: bigint = 0n,
 ): Promise<WriteResult> {
   if (!CONTRACT_ADDRESS) {
     throw new Error(
@@ -101,10 +102,11 @@ export async function writeContract(
     args: args as string[],
   };
 
-  // Submit the transaction via injected Web3 provider
+  // `value` carries the GEN deposit for payable methods (propose_action,
+  // object_to_proposal). Non-payable methods pass 0n.
   const txHash = await client.writeContract({
     ...callParams,
-    value: 0n,
+    value,
   } as Parameters<typeof client.writeContract>[0]);
 
   // Wait for the transaction receipt

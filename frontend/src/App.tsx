@@ -7,26 +7,36 @@ import { AgentRegistry } from './components/AgentRegistry';
 import { ProposalForm } from './components/ProposalForm';
 import { ProposalList } from './components/ProposalList';
 import { DisputeList } from './components/DisputeList';
+import { ClaimableWidget } from './components/ClaimableWidget';
 import { useWallet } from './hooks/useWallet';
 import { useContract } from './hooks/useContract';
 
 function App() {
   const [activeTab, setActiveTab] = useState<'agents' | 'proposals' | 'court'>('agents');
-  
-  const { isConnected } = useWallet();
-  
+
+  const { isConnected, address } = useWallet();
+
   const {
     constitution,
+    config,
     agents,
     proposals,
     disputes,
+    objectionsByProposal,
     stats,
+    owner,
+    claimable,
+    myAgent,
     updateConstitution,
     registerAgent,
     proposeAction,
     objectToProposal,
-    status
-  } = useContract();
+    resolveProposal,
+    withdraw,
+    status,
+  } = useContract(address);
+
+  const isOwner = !!address && !!owner && address.toLowerCase() === owner.toLowerCase();
 
   return (
     <div className="min-h-screen flex flex-col font-sans bg-court-bg selection:bg-court-primary selection:text-white">
@@ -38,23 +48,25 @@ function App() {
           <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5"></div>
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10">
             <h1 className="text-5xl font-extrabold text-gray-900 mb-6 tracking-tight">
-              AI Agents. <span className="text-gradient">Constitutional Guardrails.</span>
+              Permissionless AI Court. <span className="text-gradient">Anyone. Any Wallet.</span>
             </h1>
             <p className="text-xl text-gray-600 max-w-3xl mx-auto mb-10 leading-relaxed">
-              Empower AI agents to act on behalf of your organization, constrained by natural language rules enforced by GenLayer's decentralized AI validators.
+              Register with your own wallet, propose actions or file objections against a small
+              GEN deposit, and let GenLayer's decentralized AI validators judge disputes against
+              a public constitution.
             </p>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto mt-12">
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 border-b-4 border-b-court-primary">
-                <div className="text-3xl font-bold text-gray-900 mb-1">{stats?.active_agents || agents.length}</div>
-                <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">Active Agents</div>
+                <div className="text-3xl font-bold text-gray-900 mb-1">{stats?.agents ?? agents.length}</div>
+                <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">Registered Agents</div>
               </div>
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 border-b-4 border-b-court-emerald">
-                <div className="text-3xl font-bold text-gray-900 mb-1">{stats?.total_proposals || proposals.length}</div>
-                <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">Proposals Made</div>
+                <div className="text-3xl font-bold text-gray-900 mb-1">{stats?.proposals ?? proposals.length}</div>
+                <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">Proposals Filed</div>
               </div>
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 border-b-4 border-b-court-danger">
-                <div className="text-3xl font-bold text-gray-900 mb-1">{stats?.total_disputes || disputes.length}</div>
+                <div className="text-3xl font-bold text-gray-900 mb-1">{stats?.disputes ?? disputes.length}</div>
                 <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">Court Cases</div>
               </div>
             </div>
@@ -75,8 +87,10 @@ function App() {
           </section>
         ) : (
           <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
-            <ConstitutionPanel 
-              currentText={constitution} 
+            <ConstitutionPanel
+              currentText={constitution}
+              isOwner={isOwner}
+              version={config?.constitution_version ?? 1}
               onUpdate={updateConstitution}
               status={status}
             />
@@ -85,8 +99,8 @@ function App() {
               <div className="flex border-b border-gray-200 bg-gray-50/50">
                 <button
                   className={`flex-1 py-4 text-center font-bold text-sm transition-colors border-b-2 ${
-                    activeTab === 'agents' 
-                      ? 'border-court-primary text-court-primary bg-white' 
+                    activeTab === 'agents'
+                      ? 'border-court-primary text-court-primary bg-white'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                   }`}
                   onClick={() => setActiveTab('agents')}
@@ -95,8 +109,8 @@ function App() {
                 </button>
                 <button
                   className={`flex-1 py-4 text-center font-bold text-sm transition-colors border-b-2 ${
-                    activeTab === 'proposals' 
-                      ? 'border-court-primary text-court-primary bg-white' 
+                    activeTab === 'proposals'
+                      ? 'border-court-primary text-court-primary bg-white'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                   }`}
                   onClick={() => setActiveTab('proposals')}
@@ -105,8 +119,8 @@ function App() {
                 </button>
                 <button
                   className={`flex-1 py-4 text-center font-bold text-sm transition-colors border-b-2 ${
-                    activeTab === 'court' 
-                      ? 'border-court-primary text-court-primary bg-white' 
+                    activeTab === 'court'
+                      ? 'border-court-primary text-court-primary bg-white'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                   }`}
                   onClick={() => setActiveTab('court')}
@@ -117,18 +131,21 @@ function App() {
 
               <div className="p-6 bg-court-bg min-h-[500px]">
                 {activeTab === 'agents' && (
-                  <AgentRegistry 
-                    agents={agents} 
+                  <AgentRegistry
+                    agents={agents}
+                    myAddress={address}
+                    myAgent={myAgent}
                     onRegister={registerAgent}
                     status={status}
                   />
                 )}
-                
+
                 {activeTab === 'proposals' && (
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     <div className="lg:col-span-1">
-                      <ProposalForm 
-                        agents={agents} 
+                      <ProposalForm
+                        myAgent={myAgent}
+                        config={config}
                         onSubmit={proposeAction}
                         status={status}
                       />
@@ -137,10 +154,15 @@ function App() {
                       <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center">
                         <span className="mr-2">📋</span> Recent Proposals
                       </h3>
-                      <ProposalList 
-                        proposals={proposals} 
+                      <ProposalList
+                        proposals={proposals}
+                        objectionsByProposal={objectionsByProposal}
                         agents={agents}
+                        myAddress={address}
+                        myAgent={myAgent}
+                        config={config}
                         onObjectToProposal={objectToProposal}
+                        onResolveProposal={resolveProposal}
                         status={status}
                       />
                     </div>
@@ -152,10 +174,11 @@ function App() {
                     <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center">
                       <span className="mr-2">🏛️</span> Supreme AI Court Docket
                     </h3>
-                    <DisputeList 
-                      disputes={disputes} 
-                      proposals={proposals} 
-                      agents={agents} 
+                    <DisputeList
+                      disputes={disputes}
+                      proposals={proposals}
+                      objectionsByProposal={objectionsByProposal}
+                      agents={agents}
                     />
                   </div>
                 )}
@@ -165,6 +188,7 @@ function App() {
         )}
       </main>
 
+      <ClaimableWidget claimable={claimable} onWithdraw={withdraw} status={status} />
       <Footer />
     </div>
   );
